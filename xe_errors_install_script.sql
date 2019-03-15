@@ -1,0 +1,373 @@
+---- 1. CREATE SESSION ---
+
+CREATE EVENT SESSION [Errors] ON SERVER 
+ADD EVENT sqlserver.error_reported(
+    ACTION(sqlserver.client_app_name,sqlserver.client_hostname,sqlserver.database_name,sqlserver.query_hash,sqlserver.session_id,sqlserver.sql_text,sqlserver.transaction_id,sqlserver.username)
+    WHERE ([severity]>(10))) 
+ADD TARGET package0.event_file(SET filename=N'C:\XE\errors_queries.xel',metadatafile = N'C:\XE\errors_queries.xem',max_file_size=(20),max_rollover_files=(10))
+WITH (MAX_MEMORY=4096 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=5 SECONDS,MAX_EVENT_SIZE=0 KB,MEMORY_PARTITION_MODE=NONE,TRACK_CAUSALITY=OFF,STARTUP_STATE=ON)
+GO
+
+ALTER EVENT SESSION [Errors] ON SERVER 
+STATE = START;
+GO
+
+---- 2. CREATE STRUCTURE ----
+
+USE [_SQL_]
+GO
+CREATE SCHEMA XE
+GO
+
+CREATE TABLE [_SQL_].[XE].[errors](
+	[ID] [int] IDENTITY(1,1) CONSTRAINT PK_ID PRIMARY KEY CLUSTERED WITH FILLFACTOR = 100,
+	[event_time] [datetime2](7) NULL,
+	[error_number] [int] NULL,
+	[severity] [int] NULL,
+	[state] [int] NULL,
+	[user_defined] [bit] NULL,
+	[category] [nvarchar](max) NULL,
+	[destination] [nvarchar](max) NULL,
+	[is_intercepted] [bit] NULL,
+	[message] [nvarchar](max) NULL,
+	[transaction_id] [bigint] NULL,
+	[session_id] [int] NULL,
+	[database_name] [nvarchar](max) NULL,
+	[client_hostname] [nvarchar](max) NULL,
+	[client_app_name] [nvarchar](max) NULL,
+	[username] [nvarchar](max) NULL,
+	[sql_text] [nvarchar](max) NULL,
+	[query_hash] [nvarchar](max) NULL
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
+CREATE TABLE [_SQL_].[XE].[errors_exceptions](
+	[ID] [int] IDENTITY(1,1) CONSTRAINT PK_ID_EXCP PRIMARY KEY CLUSTERED WITH FILLFACTOR = 100,
+	[error_number] [int] NULL,
+    [query_hash] [nvarchar](max) NULL,
+    [database_name] [nvarchar](max) NULL,
+    [username] [nvarchar](max) NULL
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
+---- 3. CREATE PROCEDURE ----
+
+/****** Object:  StoredProcedure [dbo].[usp_XEGetErrors]    Script Date: 2016-02-29 09:49:56 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- EXEC usp_XEGetErrors @email_rec = 'mail' 
+
+CREATE PROCEDURE [dbo].[usp_XEGetErrors] @email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com'
+AS
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+--- GET DATA FROM XML --
+DECLARE @CurrentDate datetime2;
+SELECT @CurrentDate = GETDATE();
+DECLARE @StartDate datetime2 = NULL;
+SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [_SQL_].[XE].[errors]
+
+INSERT INTO [_SQL_].[XE].[errors]
+SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
+       x.event_data.value('(event/data[@name="error_number"])[1]', 'int') AS error_number,
+       x.event_data.value('(event/data[@name="severity"])[1]', 'int') AS severity,
+       x.event_data.value('(event/data[@name="state"])[1]', 'int') AS state,
+	   x.event_data.value('(event/data[@name="user_defined"])[1]', 'bit') AS user_defined,
+	   x.event_data.value('(event/data[@name="category"]/text)[1]', 'nvarchar(max)') AS category,
+	   x.event_data.value('(event/data[@name="destination"]/text)[1]', 'nvarchar(max)') AS destination,
+	   x.event_data.value('(event/data[@name="is_intercepted"])[1]', 'bit') AS is_intercepted,
+	   x.event_data.value('(event/data[@name="message"])[1]', 'nvarchar(max)') AS message,
+	   x.event_data.value('(event/action[@name="transaction_id"])[1]', 'bigint') AS transaction_id,
+	   x.event_data.value('(event/action[@name="session_id"])[1]', 'int') AS session_id,
+	   x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') AS database_name,
+	   x.event_data.value('(event/action[@name="client_hostname"])[1]', 'nvarchar(max)') AS client_hostname,
+	   x.event_data.value('(event/action[@name="client_app_name"])[1]', 'nvarchar(max)') AS client_app_name,
+	   x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') AS username,
+	   x.event_data.value('(event/action[@name="sql_text"])[1]', 'nvarchar(max)') AS sql_text,
+	   x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') AS query_hash
+FROM    sys.fn_xe_file_target_read_file ('C:\XE\errors_queries*.xel', 'C:\XE\errors_queries*.xem', null, null)
+           CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
+WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
+ORDER BY event_time DESC
+---
+---- REPPORT ----
+Declare @Body varchar(max), @BodyW varchar(max),
+		@TableHead varchar(max), @TableHeadW varchar(max),
+		@TableTail varchar(max), @TableTailW varchar(max),
+		@TableExample nvarchar(max), @TableExampleBody nvarchar(max), @BodyExample nvarchar(max),
+		@Subject varchar(100),
+		@add_info nvarchar(max),
+		@DateAndHourAdd char(13)
+ 
+Set NoCount On;
+/* -------------------------------------------------------------------------------------------------------------- */
+-- REPORT - NUMBER OF ERRORS BY HOURS
+IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
+  DROP TABLE #TempRap;
+IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+  DROP TABLE #TempRap2;
+
+-- SELECT TOP(10) * FROM [_SQL_].[XE].[errors]
+-- select * from sys.messages where message_id = 547
+-- select TOP(100) * from [_SQL_].[XE].[errors] where event_time >= '2016-02-08 10:58:05' order by event_time
+-- SELECT * FROM [_SQL_].[XE].[errors] where event_time <= DATEADD(DD, -30, GETDATE())
+-- SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = 14226
+SELECT TOP (10)
+       e.error_number,
+       m.text,
+       COUNT(*) AS Number_of_errors,
+       e.severity,
+       e.state,
+       e.category,
+       e.destination,
+       e.is_intercepted,
+       e.client_app_name
+INTO #TempRap
+FROM [_SQL_].[XE].[errors] e
+    LEFT JOIN sys.messages m
+        ON e.error_number = m.message_id
+WHERE m.language_id = 1033
+      AND e.event_time > @StartDate
+      AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+      AND e.query_hash NOT IN
+          (
+              SELECT ee.query_hash
+              FROM [_SQL_].[XE].[errors_exceptions] ee
+              WHERE e.query_hash = ee.query_hash
+                    AND e.database_name = ee.database_name
+                    AND e.username = ee.username
+                    AND e.error_number = ee.error_number
+          )
+GROUP BY e.error_number,
+         e.severity,
+         e.state,
+         e.category,
+         e.destination,
+         e.is_intercepted,
+         m.text,
+         e.client_app_name
+ORDER BY COUNT(*) DESC;
+
+IF (@@ROWCOUNT <> 0)
+BEGIN
+	Set @TableTailW = '</table>';
+	Set @TableHeadW = '<html><head>' +
+					  '<style>' +
+					  'td {border: solid black 1px;padding-left:5px;padding-right:5px;padding-top:1px;padding-bottom:1px;font-size:11pt;} ' +
+					  '</style>' +
+					  '</head>' +
+					  '<body><table cellpadding=0 cellspacing=0 border=0><caption>TOP 10 NUMBER OF ERRORS. DATE FROM ' + CONVERT(CHAR(19), @StartDate, 121) + ' TO ' + CONVERT(CHAR(19), @CurrentDate, 121) + '</caption>' +
+					  '<tr bgcolor=#c0f4c3>' +
+					  '<td align=center><b>Error Number</b></td>' +
+					  '<td align=center><b>Error Text</b></td>' +
+					  '<td align=center><b>Number of errors</b></td>' +
+					  '<td align=center><b>Severity</b></td>' +
+					  '<td align=center><b>State</b></td>' +
+					  '<td align=center><b>Category</b></td>' +
+					  '<td align=center><b>Destination</b></td>' +
+					  '<td align=center><b>Is intercepted?</b></td>' + 
+					  '<td align=center><b>Client app name</b></td></tr>';
+
+	Select @BodyW = (SELECT error_number AS [TD align=right]
+						  ,ISNULL(text, 'n/a') AS [TD align=left]
+						  ,ISNULL(Number_of_errors, 0) AS [TD align=right]
+						  ,ISNULL(severity, 0) AS [TD align=right]
+						  ,ISNULL(state, 0) AS [TD align=right]
+						  ,ISNULL(category, 'n/a') AS [TD align=center]
+						  ,ISNULL(destination, 'n/a') AS [TD align=center]
+						  ,ISNULL(is_intercepted, 0) AS [TD align=center]
+						  ,ISNULL(client_app_name, 'n/a') AS [TD align=center]
+					FROM #TempRap
+					WHERE client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+					ORDER BY Number_of_errors DESC
+					For XML raw('tr'), Elements)
+
+	-- Replace the entity codes and row numbers
+	Set @BodyW = Replace(@BodyW, '_x0020_', space(1))
+	Set @BodyW = Replace(@BodyW, '_x003D_', '=')
+
+	--- 
+	DECLARE @CountTemp INT, @EN INT, @State INT, @Category NVARCHAR(MAX), @Destination NVARCHAR(MAX), @Severity INT, @is_intercepted BIT, @ClientAppName NVARCHAR(MAX);
+	SELECT @CountTemp = COUNT(*) FROM #TempRap
+	SET @BodyExample = '';
+	WHILE (@CountTemp > 0)
+	BEGIN
+		-- GET FIRST ERROR ---
+		SELECT TOP(1) @EN = error_number, @State = state, @Category = category, @Destination = destination, @Severity = severity, @is_intercepted = is_intercepted, @ClientAppName = client_app_name FROM #TempRap ORDER BY Number_of_errors DESC
+		----------------------
+		SELECT  TOP(3) ID 
+				,CONVERT(CHAR(19), e.event_time, 121) AS event_time
+				,e.message
+				,e.sql_text
+				,e.database_name
+				,e.client_hostname
+				,e.client_app_name
+				,e.username
+		INTO #TempRap2
+		FROM [_SQL_].[XE].[errors] e
+		WHERE e.event_time > @StartDate AND e.error_number = @EN AND @State = state AND @Category = category AND @Destination = destination AND @Severity = severity AND @is_intercepted = is_intercepted AND @ClientAppName = client_app_name
+		AND client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+		ORDER BY e.event_time DESC;
+
+		Set @TableExample = '</br><table cellpadding=0 cellspacing=0 border=0><caption>TOP 3 EXAMPLES OF ERROR NR ' + CAST(@EN AS VARCHAR(10)) + '</caption>' +
+						  '<tr bgcolor=#90ffff>' +
+						  '<td align=center><b>ID</b></td>' +
+						  '<td align=center><b>Event time</b></td>' +
+						  '<td align=center><b>Message</b></td>' +
+						  '<td align=center><b>SQL Text</b></td>' +
+						  '<td align=center><b>Database Name</b></td>' +
+						  '<td align=center><b>Host Name</b></td>' +
+						  '<td align=center><b>Application Name</b></td>' +
+						  '<td align=center><b>User Name</b></td></tr>';
+
+		Select @TableExampleBody = (SELECT ID AS [TD align=right]
+							  ,event_time AS [TD align=center]
+							  ,ISNULL(message, 'n/a') AS [TD align=left]
+							  ,CAST(ISNULL(sql_text, 'n/a') AS NVARCHAR(255)) + ' [/cut]' AS [TD align=left]
+							  ,ISNULL(database_name, 'n/a') AS [TD align=left]
+							  ,ISNULL(client_hostname, 'n/a') AS [TD align=left]
+							  ,ISNULL(client_app_name, 'n/a') AS [TD align=center]
+							  ,ISNULL(username, 'n/a') AS [TD align=center]
+						FROM #TempRap2
+						WHERE	client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+								ORDER BY event_time DESC
+						For XML raw('tr'), Elements)
+
+		select @TableExampleBody = ISNULL(@TableExampleBody, '');
+
+		-- CLEAN UP ----------
+		DELETE FROM #TempRap WHERE error_number = @EN and state = @State and category = @Category and destination = @Destination and severity = @Severity and is_intercepted = @is_intercepted and client_app_name = @ClientAppName
+		----------------------
+		Set @BodyExample = @BodyExample + @TableExample + @TableExampleBody + '</table>';
+		IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+		DROP TABLE #TempRap2;
+		SET @CountTemp = @CountTemp - 1;
+	END
+	--- 
+	Set @BodyExample = Replace(@BodyExample, '_x0020_', space(1));
+	Set @BodyExample = Replace(@BodyExample, '_x003D_', '=');
+	
+	-- CREATE HTML BODY 
+	Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = ... </body></html>'
+	
+	SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
+	-- return output
+	 EXEC msdb.dbo.sp_send_dbmail
+				@profile_name = 'mail_profile',
+				@recipients = @email_rec,
+				@body =  @Body,
+				@subject = @Subject,
+				@body_format = 'HTML';
+END -- IF ROWCOUNT <> 0
+---- CLEAN UP --
+IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
+  DROP TABLE #TempRap;
+IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+  DROP TABLE #TempRap2;
+
+
+GO
+
+---- 4. JOB ----
+
+USE [msdb]
+GO
+
+/****** Object:  Job [__XE_ERRORS__]    Script Date: 2016-02-26 14:23:48 ******/
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object:  JobCategory [[Uncategorized (Local)]]    Script Date: 2016-02-26 14:23:48 ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'[Uncategorized (Local)]' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'[Uncategorized (Local)]'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N'__XE_ERRORS__', 
+		@enabled=1, 
+		@notify_level_eventlog=0, 
+		@notify_level_email=2, 
+		@notify_level_netsend=0, 
+		@notify_level_page=0, 
+		@delete_level=0, 
+		@description=N'Presents report from errors captured by Extended Events - 2018-08-09', 
+		@category_name=N'[Uncategorized (Local)]', 
+		@owner_login_name=N'sa', 
+		@notify_email_operator_name=N'MSSQLAdmins', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [_GtRR_]    Script Date: 2016-02-26 14:23:48 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'_GtRR_', 
+		@step_id=1, 
+		@cmdexec_success_code=0, 
+		@on_success_action=3, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'EXEC usp_XEGetErrors @email_rec = ''MSSQLAdmins@domain.com''', 
+		@database_name=N'_SQL_', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [_DLT_]    Script Date: 2016-02-26 14:23:48 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'_DLT_', 
+		@step_id=2, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'DELETE FROM [_SQL_].[XE].[errors] where event_time <= DATEADD(DD, -30, GETDATE())', 
+		@database_name=N'master', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'15:30', 
+		@enabled=1, 
+		@freq_type=8, 
+		@freq_interval=62, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=1, 
+		@active_start_date=20160211, 
+		@active_end_date=99991231, 
+		@active_start_time=153000, 
+		@active_end_time=235959
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'7:30', 
+		@enabled=1, 
+		@freq_type=8, 
+		@freq_interval=62, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=1, 
+		@active_start_date=20160211, 
+		@active_end_date=99991231, 
+		@active_start_time=73000, 
+		@active_end_time=235959
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO
+
+
