@@ -61,15 +61,35 @@ GO
 
 
 -- EXEC usp_XEGetErrors @email_rec = 'mail' 
+USE [_SQL_]
+GO
+----
+IF NOT EXISTS (
+  SELECT 1 
+    FROM INFORMATION_SCHEMA.ROUTINES 
+   WHERE SPECIFIC_SCHEMA = N'dbo'
+     AND SPECIFIC_NAME = N'usp_XEGetErrors' 
+)
+   EXEC ('CREATE PROCEDURE [dbo].[usp_XEGetErrors] AS SELECT 1');
+GO
+---
 
-CREATE PROCEDURE [dbo].[usp_XEGetErrors] @email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com'
+ALTER PROCEDURE [dbo].[usp_XEGetErrors] @email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
+                                        @XE_Path NVARCHAR(MAX) = 'C:\XE',
+                                        @MaxTimeoutsForNotification INT = 0
 AS
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+-- XE Patch
+DECLARE @XE_Path_XEL NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xel'
+DECLARE @XE_Path_XEM NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xem'
+
 --- GET DATA FROM XML --
 DECLARE @CurrentDate datetime2;
 SELECT @CurrentDate = GETDATE();
 DECLARE @StartDate datetime2 = NULL;
 SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [_SQL_].[XE].[errors]
+
 
 INSERT INTO [_SQL_].[XE].[errors]
 SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
@@ -89,19 +109,18 @@ SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.v
 	   x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') AS username,
 	   x.event_data.value('(event/action[@name="sql_text"])[1]', 'nvarchar(max)') AS sql_text,
 	   x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') AS query_hash
-FROM    sys.fn_xe_file_target_read_file ('C:\XE\errors_queries*.xel', 'C:\XE\errors_queries*.xem', null, null)
+FROM    sys.fn_xe_file_target_read_file (@XE_Path_XEL, @XE_Path_XEM, null, null)
            CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
 WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
 ORDER BY event_time DESC
 ---
 ---- REPPORT ----
 Declare @Body varchar(max), @BodyW varchar(max),
-		@TableHead varchar(max), @TableHeadW varchar(max),
-		@TableTail varchar(max), @TableTailW varchar(max),
+		@TableHeadW varchar(max),
+		@TableTailW varchar(max),
 		@TableExample nvarchar(max), @TableExampleBody nvarchar(max), @BodyExample nvarchar(max),
 		@Subject varchar(100),
-		@add_info nvarchar(max),
-		@DateAndHourAdd char(13)
+		@NumberOfErrors INT = 0;
  
 Set NoCount On;
 /* -------------------------------------------------------------------------------------------------------------- */
@@ -116,6 +135,9 @@ IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
 -- select TOP(100) * from [_SQL_].[XE].[errors] where event_time >= '2016-02-08 10:58:05' order by event_time
 -- SELECT * FROM [_SQL_].[XE].[errors] where event_time <= DATEADD(DD, -30, GETDATE())
 -- SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = 14226
+
+DECLARE @RowCount INT = 0;
+
 SELECT TOP (10)
        e.error_number,
        m.text,
@@ -152,7 +174,14 @@ GROUP BY e.error_number,
          e.client_app_name
 ORDER BY COUNT(*) DESC;
 
-IF (@@ROWCOUNT <> 0)
+SET @RowCount = @@ROWCOUNT;
+
+-- GET NUMBER OF ALL TIMEOUTS --
+    SELECT @NumberOfErrors = COUNT(*) 
+    FROM [_SQL_].[XE].[errors]
+    WHERE event_time > @StartDate AND event_time <= @CurrentDate
+
+IF (@RowCount <> 0 AND @NumberOfErrors > @MaxTimeoutsForNotification)
 BEGIN
 	Set @TableTailW = '</table>';
 	Set @TableHeadW = '<html><head>' +
@@ -252,7 +281,10 @@ BEGIN
 	Set @BodyExample = Replace(@BodyExample, '_x003D_', '=');
 	
 	-- CREATE HTML BODY 
-	Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = ... </body></html>'
+	Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = ... </br></br>
+            All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b></br>
+            Errors notification level: <b>' + CAST(@MaxTimeoutsForNotification AS VARCHAR(10))  + '</b></br>
+            </br>XE Errors 2019</body></html>'
 	
 	SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
 	-- return output
