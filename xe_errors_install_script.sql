@@ -76,7 +76,7 @@ GO
 
 ALTER PROCEDURE [dbo].[usp_XEGetErrors] @email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
                                         @XE_Path NVARCHAR(MAX) = 'C:\XE',
-                                        @MaxTimeoutsForNotification INT = 0
+                                        @MaxErrorsForNotification INT = 0
 AS
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 
@@ -178,10 +178,23 @@ SET @RowCount = @@ROWCOUNT;
 
 -- GET NUMBER OF ALL TIMEOUTS --
     SELECT @NumberOfErrors = COUNT(*) 
-    FROM [_SQL_].[XE].[errors]
-    WHERE event_time > @StartDate AND event_time <= @CurrentDate
+    FROM [_SQL_].[XE].[errors] e
+    LEFT JOIN sys.messages m
+        ON e.error_number = m.message_id
+        WHERE m.language_id = 1033
+      AND e.event_time > @StartDate
+      AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+      AND e.query_hash NOT IN
+        (
+            SELECT ee.query_hash
+            FROM [_SQL_].[XE].[errors_exceptions] ee
+            WHERE e.query_hash = ee.query_hash
+                AND e.database_name = ee.database_name
+                AND e.username = ee.username
+                AND e.error_number = ee.error_number
+        )
 
-IF (@RowCount <> 0 AND @NumberOfErrors > @MaxTimeoutsForNotification)
+IF (@RowCount <> 0 AND @NumberOfErrors > @MaxErrorsForNotification AND @email_rec IS NOT NULL)
 BEGIN
 	Set @TableTailW = '</table>';
 	Set @TableHeadW = '<html><head>' +
@@ -283,7 +296,7 @@ BEGIN
 	-- CREATE HTML BODY 
 	Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = ... </br></br>
             All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b></br>
-            Errors notification level: <b>' + CAST(@MaxTimeoutsForNotification AS VARCHAR(10))  + '</b></br>
+            Errors notification level: <b>' + CAST(@MaxErrorsForNotification AS VARCHAR(10))  + '</b></br>
             </br>XE Errors 2019</body></html>'
 	
 	SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
