@@ -1,4 +1,11 @@
----- 1. CREATE SESSION ---
+---- 1. CREATE FOLDER FOR EVENTS ----
+-- C:\XE -- repalce in whole script if you change it
+
+---- 2. CHOOSE DATABASE FOR STRUCTURE ----
+USE [_SQL_] --repalce in whole script if you change it
+GO
+
+---- 3. CREATE SESSION ---
 
 CREATE EVENT SESSION [Errors] ON SERVER 
 ADD EVENT sqlserver.error_reported(
@@ -12,7 +19,7 @@ ALTER EVENT SESSION [Errors] ON SERVER
 STATE = START;
 GO
 
----- 2. CREATE STRUCTURE ----
+---- 4. CREATE STRUCTURE ----
 
 USE [_SQL_]
 GO
@@ -50,31 +57,28 @@ CREATE TABLE [_SQL_].[XE].[errors_exceptions](
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
 GO
 
----- 3. CREATE PROCEDURE ----
+---- 5. CREATE PROCEDURE ----
 
-/****** Object:  StoredProcedure [dbo].[usp_XEGetErrors]    Script Date: 2016-02-29 09:49:56 ******/
 SET ANSI_NULLS ON
 GO
-
 SET QUOTED_IDENTIFIER ON
 GO
 
-
--- EXEC usp_XEGetErrors @email_rec = 'mail' 
 USE [_SQL_]
 GO
 ----
 IF NOT EXISTS (
   SELECT 1 
     FROM INFORMATION_SCHEMA.ROUTINES 
-   WHERE SPECIFIC_SCHEMA = N'dbo'
+   WHERE SPECIFIC_SCHEMA = N'XE'
      AND SPECIFIC_NAME = N'usp_XEGetErrors' 
 )
-   EXEC ('CREATE PROCEDURE [dbo].[usp_XEGetErrors] AS SELECT 1');
+   EXEC ('CREATE PROCEDURE [XE].[usp_XEGetErrors] AS SELECT 1');
 GO
 ---
-
-ALTER PROCEDURE [dbo].[usp_XEGetErrors] @email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
+--EXEC [util].[XE].usp_XEGetErrors @profile_name = 'mail_profile', @email_rec = 'MSSQLAdmins@domain.com', @XE_Path='C:\XE', @MaxErrorsForNotification = 0;
+ALTER PROCEDURE [XE].[usp_XEGetErrors] @profile_name NVARCHAR(128) = 'mail_profile',
+										@email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
                                         @XE_Path NVARCHAR(MAX) = 'C:\XE',
                                         @MaxErrorsForNotification INT = 0
 AS
@@ -130,12 +134,6 @@ IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
 IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
   DROP TABLE #TempRap2;
 
--- SELECT TOP(10) * FROM [_SQL_].[XE].[errors]
--- select * from sys.messages where message_id = 547
--- select TOP(100) * from [_SQL_].[XE].[errors] where event_time >= '2016-02-08 10:58:05' order by event_time
--- SELECT * FROM [_SQL_].[XE].[errors] where event_time <= DATEADD(DD, -30, GETDATE())
--- SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = 14226
-
 DECLARE @RowCount INT = 0;
 
 SELECT TOP (10)
@@ -176,7 +174,7 @@ ORDER BY COUNT(*) DESC;
 
 SET @RowCount = @@ROWCOUNT;
 
--- GET NUMBER OF ALL TIMEOUTS --
+-- GET NUMBER OF ALL ERRORS --
     SELECT @NumberOfErrors = COUNT(*) 
     FROM [_SQL_].[XE].[errors] e
     LEFT JOIN sys.messages m
@@ -302,7 +300,7 @@ BEGIN
 	SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
 	-- return output
 	 EXEC msdb.dbo.sp_send_dbmail
-				@profile_name = 'mail_profile',
+				@profile_name = @profile_name,
 				@recipients = @email_rec,
 				@body =  @Body,
 				@subject = @Subject,
@@ -313,106 +311,73 @@ IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
   DROP TABLE #TempRap;
 IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
   DROP TABLE #TempRap2;
-
-
 GO
 
----- 4. JOB ----
+---- 6. JOB ----
 
 USE [msdb]
 GO
 
-/****** Object:  Job [__XE_ERRORS__]    Script Date: 2016-02-26 14:23:48 ******/
-BEGIN TRANSACTION
-DECLARE @ReturnCode INT
-SELECT @ReturnCode = 0
-/****** Object:  JobCategory [[Uncategorized (Local)]]    Script Date: 2016-02-26 14:23:48 ******/
-IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'[Uncategorized (Local)]' AND category_class=1)
-BEGIN
-EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'[Uncategorized (Local)]'
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-
-END
+DECLARE @Date datetime2 = GETDATE();
+DECLARE @Name NVARCHAR(100) = ORIGINAL_LOGIN()
+DECLARE @Description NVARCHAR(2000) = N'Presents report from errors captured by Extended Events - ' + CONVERT(CHAR(10), @Date, 121) + ' - ' + @Name;
 
 DECLARE @jobId BINARY(16)
-EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N'__XE_ERRORS__', 
+EXEC  msdb.dbo.sp_add_job @job_name=N'__XE_ERRORS__', 
 		@enabled=1, 
 		@notify_level_eventlog=0, 
 		@notify_level_email=2, 
-		@notify_level_netsend=0, 
-		@notify_level_page=0, 
+		@notify_level_page=2, 
 		@delete_level=0, 
-		@description=N'Presents report from errors captured by Extended Events - 2018-08-09', 
-		@category_name=N'[Uncategorized (Local)]', 
-		@owner_login_name=N'sa', 
-		@notify_email_operator_name=N'MSSQLAdmins', @job_id = @jobId OUTPUT
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-/****** Object:  Step [_GtRR_]    Script Date: 2016-02-26 14:23:48 ******/
-EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'_GtRR_', 
+		@description=@Description, 
+		@category_name=N'Database Maintenance', 
+		@owner_login_name=N'sa', @job_id = @jobId OUTPUT
+select @jobId
+GO
+EXEC msdb.dbo.sp_add_jobserver @job_name=N'__XE_ERRORS__', @server_name = @@SERVERNAME
+GO
+USE [msdb]
+GO
+EXEC msdb.dbo.sp_add_jobstep @job_name=N'__XE_ERRORS__', @step_name=N'_report_', 
 		@step_id=1, 
 		@cmdexec_success_code=0, 
-		@on_success_action=3, 
-		@on_success_step_id=0, 
-		@on_fail_action=2, 
-		@on_fail_step_id=0, 
-		@retry_attempts=0, 
-		@retry_interval=0, 
-		@os_run_priority=0, @subsystem=N'TSQL', 
-		@command=N'EXEC usp_XEGetErrors @email_rec = ''MSSQLAdmins@domain.com''', 
-		@database_name=N'_SQL_', 
-		@flags=0
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-/****** Object:  Step [_DLT_]    Script Date: 2016-02-26 14:23:48 ******/
-EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'_DLT_', 
-		@step_id=2, 
-		@cmdexec_success_code=0, 
 		@on_success_action=1, 
-		@on_success_step_id=0, 
 		@on_fail_action=2, 
-		@on_fail_step_id=0, 
 		@retry_attempts=0, 
 		@retry_interval=0, 
 		@os_run_priority=0, @subsystem=N'TSQL', 
-		@command=N'DELETE FROM [_SQL_].[XE].[errors] where event_time <= DATEADD(DD, -30, GETDATE())', 
+		@command=N'EXEC [_SQL_].[XE].usp_XEGetErrors @profile_name = ''mail_profile'', @email_rec = ''MSSQLAdmins@domain.com'', @XE_Path=''C:\XE'', @MaxErrorsForNotification = 0;', 
 		@database_name=N'master', 
 		@flags=0
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'15:30', 
-		@enabled=1, 
-		@freq_type=8, 
-		@freq_interval=62, 
-		@freq_subday_type=1, 
-		@freq_subday_interval=0, 
-		@freq_relative_interval=0, 
-		@freq_recurrence_factor=1, 
-		@active_start_date=20160211, 
-		@active_end_date=99991231, 
-		@active_start_time=153000, 
-		@active_end_time=235959
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'7:30', 
-		@enabled=1, 
-		@freq_type=8, 
-		@freq_interval=62, 
-		@freq_subday_type=1, 
-		@freq_subday_interval=0, 
-		@freq_relative_interval=0, 
-		@freq_recurrence_factor=1, 
-		@active_start_date=20160211, 
-		@active_end_date=99991231, 
-		@active_start_time=73000, 
-		@active_end_time=235959
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
-IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
-COMMIT TRANSACTION
-GOTO EndSave
-QuitWithRollback:
-    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
-EndSave:
-
 GO
-
-
+USE [msdb]
+GO
+EXEC msdb.dbo.sp_update_job @job_name=N'__XE_ERRORS__', 
+		@enabled=1, 
+		@start_step_id=1, 
+		@notify_level_eventlog=0, 
+		@notify_level_email=2, 
+		@notify_level_page=2, 
+		@delete_level=0, 
+		@category_name=N'Database Maintenance', 
+		@owner_login_name=N'sa', 
+		@notify_email_operator_name=N'', 
+		@notify_page_operator_name=N''
+GO
+USE [msdb]
+GO
+DECLARE @schedule_id int
+EXEC msdb.dbo.sp_add_jobschedule @job_name=N'__XE_ERRORS__', @name=N'workday at 6 AM', 
+		@enabled=1, 
+		@freq_type=8, 
+		@freq_interval=62, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=1, 
+		@active_start_date=20230721, 
+		@active_end_date=99991231, 
+		@active_start_time=60000, 
+		@active_end_time=235959, @schedule_id = @schedule_id OUTPUT
+select @schedule_id
+GO
