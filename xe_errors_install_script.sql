@@ -116,6 +116,15 @@ SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.v
 FROM    sys.fn_xe_file_target_read_file (@XE_Path_XEL, @XE_Path_XEM, null, null)
            CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
 WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
+AND x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)')  NOT IN
+(
+    SELECT ee.query_hash
+    FROM [_SQL_].[XE].[errors_exceptions] ee
+    WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ee.query_hash
+        AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ee.database_name
+        AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ee.username
+        AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ee.error_number
+)
 ORDER BY event_time DESC
 ---
 ---- REPPORT ----
@@ -153,15 +162,6 @@ FROM [_SQL_].[XE].[errors] e
 WHERE m.language_id = 1033
       AND e.event_time > @StartDate
       AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-      AND e.query_hash NOT IN
-          (
-              SELECT ee.query_hash
-              FROM [_SQL_].[XE].[errors_exceptions] ee
-              WHERE e.query_hash = ee.query_hash
-                    AND e.database_name = ee.database_name
-                    AND e.username = ee.username
-                    AND e.error_number = ee.error_number
-          )
 GROUP BY e.error_number,
          e.severity,
          e.state,
@@ -182,15 +182,6 @@ SET @RowCount = @@ROWCOUNT;
         WHERE m.language_id = 1033
       AND e.event_time > @StartDate
       AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-      AND e.query_hash NOT IN
-        (
-            SELECT ee.query_hash
-            FROM [_SQL_].[XE].[errors_exceptions] ee
-            WHERE e.query_hash = ee.query_hash
-                AND e.database_name = ee.database_name
-                AND e.username = ee.username
-                AND e.error_number = ee.error_number
-        )
 
 IF (@RowCount <> 0 AND @NumberOfErrors > @MaxErrorsForNotification AND @email_rec IS NOT NULL)
 BEGIN
