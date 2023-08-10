@@ -75,9 +75,6 @@ IF NOT EXISTS (
 GO
 ---
 --EXEC [util].[XE].usp_XEGetErrors @profile_name = 'mail_profile', @email_rec = 'MSSQLAdmins@domain.com', @XE_Path='C:\XE', @MaxErrorsForNotification = 0;
-USE [util]
-GO
-/****** Object:  StoredProcedure [XE].[usp_XEGetErrors]    Script Date: 10.08.2023 20:18:38 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -98,10 +95,10 @@ BEGIN
 	DECLARE @CurrentDate datetime2;
 	SELECT @CurrentDate = GETDATE();
 	DECLARE @StartDate datetime2 = NULL;
-	SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [util].[XE].[errors]
+	SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [XE].[errors]
 
 
-	INSERT INTO [util].[XE].[errors]
+	INSERT INTO [XE].[errors]
 	SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
 		   x.event_data.value('(event/data[@name="error_number"])[1]', 'int') AS error_number,
 		   x.event_data.value('(event/data[@name="severity"])[1]', 'int') AS severity,
@@ -125,7 +122,7 @@ BEGIN
 	 AND x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)')  NOT IN
 			  (
 				  SELECT ee.query_hash
-				  FROM [util].[XE].[errors_exceptions] ee
+				  FROM [XE].[errors_exceptions] ee
 				  WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ee.query_hash
 						AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ee.database_name
 						AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ee.username
@@ -162,7 +159,7 @@ BEGIN
 		   e.is_intercepted,
 		   e.client_app_name
 	INTO #TempRap
-	FROM [util].[XE].[errors] e
+	FROM [XE].[errors] e
 		LEFT JOIN sys.messages m
 			ON e.error_number = m.message_id
 	WHERE m.language_id = 1033
@@ -182,7 +179,7 @@ BEGIN
 
 	-- GET NUMBER OF ALL ERRORS --
 		SELECT @NumberOfErrors = COUNT(*) 
-		FROM [util].[XE].[errors] e
+		FROM [XE].[errors] e
 		LEFT JOIN sys.messages m
 			ON e.error_number = m.message_id
 			WHERE m.language_id = 1033
@@ -246,12 +243,12 @@ BEGIN
 					,e.client_app_name
 					,e.username
 			INTO #TempRap2
-			FROM [util].[XE].[errors] e
+			FROM [XE].[errors] e
 			WHERE e.event_time > @StartDate AND e.error_number = @EN AND @State = state AND @Category = category AND @Destination = destination AND @Severity = severity AND @is_intercepted = is_intercepted AND @ClientAppName = client_app_name
 			AND client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
 			ORDER BY e.event_time DESC;
 
-			Set @TableExample = '</br><table cellpadding=0 cellspacing=0 border=0><caption>TOP 3 EXAMPLES OF ERROR NR ' + CAST(@EN AS VARCHAR(10)) + '</caption>' +
+			Set @TableExample = '<br><table cellpadding=0 cellspacing=0 border=0><caption>TOP 3 EXAMPLES OF ERROR NR ' + CAST(@EN AS VARCHAR(10)) + '</caption>' +
 							  '<tr bgcolor=#90ffff>' +
 							  '<td align=center><b>ID</b></td>' +
 							  '<td align=center><b>Event time</b></td>' +
@@ -290,10 +287,10 @@ BEGIN
 		Set @BodyExample = Replace(@BodyExample, '_x003D_', '=');
 	
 		-- CREATE HTML BODY 
-		Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [util].[XE].[errors] WHERE ID = ... </br></br>
-				All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b></br>
-				Errors notification level: <b>' + CAST(@MaxErrorsForNotification AS VARCHAR(10))  + '</b></br>
-				</br>XE Errors 2023</body></html>'
+		Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '<br><br>Get full example: <br> SELECT * FROM [XE].[errors] WHERE ID = ... <br><br>
+				All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b><br>
+				Errors notification level: <b>' + CAST(@MaxErrorsForNotification AS VARCHAR(10))  + '</b><br>
+				<br>XE Errors 2023</body></html>'
 	
 		SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
 		-- return output
