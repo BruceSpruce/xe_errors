@@ -2,7 +2,7 @@
 -- C:\XE -- repalce in whole script if you change it
 
 ---- 2. CHOOSE DATABASE FOR STRUCTURE ----
-USE [_SQL_] --repalce in whole script if you change it
+USE [_SQL_] --repalce [_SQL_] in whole script if you change it
 GO
 
 ---- 3. CREATE SESSION ---
@@ -64,8 +64,6 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-USE [_SQL_]
-GO
 ----
 IF NOT EXISTS (
   SELECT 1 
@@ -77,231 +75,241 @@ IF NOT EXISTS (
 GO
 ---
 --EXEC [util].[XE].usp_XEGetErrors @profile_name = 'mail_profile', @email_rec = 'MSSQLAdmins@domain.com', @XE_Path='C:\XE', @MaxErrorsForNotification = 0;
+USE [util]
+GO
+/****** Object:  StoredProcedure [XE].[usp_XEGetErrors]    Script Date: 10.08.2023 20:18:38 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 ALTER PROCEDURE [XE].[usp_XEGetErrors] @profile_name NVARCHAR(128) = 'mail_profile',
 										@email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
-                                        @XE_Path NVARCHAR(MAX) = 'C:\XE',
+                                        @XE_Path NVARCHAR(MAX) = 'S:\XE',
                                         @MaxErrorsForNotification INT = 0
 AS
-SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
-
--- XE Patch
-DECLARE @XE_Path_XEL NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xel'
-DECLARE @XE_Path_XEM NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xem'
-
---- GET DATA FROM XML --
-DECLARE @CurrentDate datetime2;
-SELECT @CurrentDate = GETDATE();
-DECLARE @StartDate datetime2 = NULL;
-SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [_SQL_].[XE].[errors]
-
-
-INSERT INTO [_SQL_].[XE].[errors]
-SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
-       x.event_data.value('(event/data[@name="error_number"])[1]', 'int') AS error_number,
-       x.event_data.value('(event/data[@name="severity"])[1]', 'int') AS severity,
-       x.event_data.value('(event/data[@name="state"])[1]', 'int') AS state,
-	   x.event_data.value('(event/data[@name="user_defined"])[1]', 'bit') AS user_defined,
-	   x.event_data.value('(event/data[@name="category"]/text)[1]', 'nvarchar(max)') AS category,
-	   x.event_data.value('(event/data[@name="destination"]/text)[1]', 'nvarchar(max)') AS destination,
-	   x.event_data.value('(event/data[@name="is_intercepted"])[1]', 'bit') AS is_intercepted,
-	   x.event_data.value('(event/data[@name="message"])[1]', 'nvarchar(max)') AS message,
-	   x.event_data.value('(event/action[@name="transaction_id"])[1]', 'bigint') AS transaction_id,
-	   x.event_data.value('(event/action[@name="session_id"])[1]', 'int') AS session_id,
-	   x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') AS database_name,
-	   x.event_data.value('(event/action[@name="client_hostname"])[1]', 'nvarchar(max)') AS client_hostname,
-	   x.event_data.value('(event/action[@name="client_app_name"])[1]', 'nvarchar(max)') AS client_app_name,
-	   x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') AS username,
-	   x.event_data.value('(event/action[@name="sql_text"])[1]', 'nvarchar(max)') AS sql_text,
-	   x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') AS query_hash
-FROM    sys.fn_xe_file_target_read_file (@XE_Path_XEL, @XE_Path_XEM, null, null)
-           CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
-WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
-AND x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)')  NOT IN
-(
-    SELECT ee.query_hash
-    FROM [_SQL_].[XE].[errors_exceptions] ee
-    WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ee.query_hash
-        AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ee.database_name
-        AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ee.username
-        AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ee.error_number
-)
-ORDER BY event_time DESC
----
----- REPPORT ----
-Declare @Body varchar(max), @BodyW varchar(max),
-		@TableHeadW varchar(max),
-		@TableTailW varchar(max),
-		@TableExample nvarchar(max), @TableExampleBody nvarchar(max), @BodyExample nvarchar(max),
-		@Subject varchar(100),
-		@NumberOfErrors INT = 0;
- 
-Set NoCount On;
-/* -------------------------------------------------------------------------------------------------------------- */
--- REPORT - NUMBER OF ERRORS BY HOURS
-IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
-  DROP TABLE #TempRap;
-IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
-  DROP TABLE #TempRap2;
-
-DECLARE @RowCount INT = 0;
-
-SELECT TOP (10)
-       e.error_number,
-       m.text,
-       COUNT(*) AS Number_of_errors,
-       e.severity,
-       e.state,
-       e.category,
-       e.destination,
-       e.is_intercepted,
-       e.client_app_name
-INTO #TempRap
-FROM [_SQL_].[XE].[errors] e
-    LEFT JOIN sys.messages m
-        ON e.error_number = m.message_id
-WHERE m.language_id = 1033
-      AND e.event_time > @StartDate
-      AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-GROUP BY e.error_number,
-         e.severity,
-         e.state,
-         e.category,
-         e.destination,
-         e.is_intercepted,
-         m.text,
-         e.client_app_name
-ORDER BY COUNT(*) DESC;
-
-SET @RowCount = @@ROWCOUNT;
-
--- GET NUMBER OF ALL ERRORS --
-    SELECT @NumberOfErrors = COUNT(*) 
-    FROM [_SQL_].[XE].[errors] e
-    LEFT JOIN sys.messages m
-        ON e.error_number = m.message_id
-        WHERE m.language_id = 1033
-      AND e.event_time > @StartDate
-      AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-
-IF (@RowCount <> 0 AND @NumberOfErrors > @MaxErrorsForNotification AND @email_rec IS NOT NULL)
 BEGIN
-	Set @TableTailW = '</table>';
-	Set @TableHeadW = '<html><head>' +
-					  '<style>' +
-					  'td {border: solid black 1px;padding-left:5px;padding-right:5px;padding-top:1px;padding-bottom:1px;font-size:11pt;} ' +
-					  '</style>' +
-					  '</head>' +
-					  '<body><table cellpadding=0 cellspacing=0 border=0><caption>TOP 10 NUMBER OF ERRORS. DATE FROM ' + CONVERT(CHAR(19), @StartDate, 121) + ' TO ' + CONVERT(CHAR(19), @CurrentDate, 121) + '</caption>' +
-					  '<tr bgcolor=#c0f4c3>' +
-					  '<td align=center><b>Error Number</b></td>' +
-					  '<td align=center><b>Error Text</b></td>' +
-					  '<td align=center><b>Number of errors</b></td>' +
-					  '<td align=center><b>Severity</b></td>' +
-					  '<td align=center><b>State</b></td>' +
-					  '<td align=center><b>Category</b></td>' +
-					  '<td align=center><b>Destination</b></td>' +
-					  '<td align=center><b>Is intercepted?</b></td>' + 
-					  '<td align=center><b>Client app name</b></td></tr>';
+	SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 
-	Select @BodyW = (SELECT error_number AS [TD align=right]
-						  ,ISNULL(text, 'n/a') AS [TD align=left]
-						  ,ISNULL(Number_of_errors, 0) AS [TD align=right]
-						  ,ISNULL(severity, 0) AS [TD align=right]
-						  ,ISNULL(state, 0) AS [TD align=right]
-						  ,ISNULL(category, 'n/a') AS [TD align=center]
-						  ,ISNULL(destination, 'n/a') AS [TD align=center]
-						  ,ISNULL(is_intercepted, 0) AS [TD align=center]
-						  ,ISNULL(client_app_name, 'n/a') AS [TD align=center]
-					FROM #TempRap
-					WHERE client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-					ORDER BY Number_of_errors DESC
-					For XML raw('tr'), Elements)
+	-- XE Patch
+	DECLARE @XE_Path_XEL NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xel'
+	DECLARE @XE_Path_XEM NVARCHAR(MAX) = @XE_Path + '\errors_queries*.xem'
 
-	-- Replace the entity codes and row numbers
-	Set @BodyW = Replace(@BodyW, '_x0020_', space(1))
-	Set @BodyW = Replace(@BodyW, '_x003D_', '=')
+	--- GET DATA FROM XML --
+	DECLARE @CurrentDate datetime2;
+	SELECT @CurrentDate = GETDATE();
+	DECLARE @StartDate datetime2 = NULL;
+	SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [util].[XE].[errors]
 
-	--- 
-	DECLARE @CountTemp INT, @EN INT, @State INT, @Category NVARCHAR(MAX), @Destination NVARCHAR(MAX), @Severity INT, @is_intercepted BIT, @ClientAppName NVARCHAR(MAX);
-	SELECT @CountTemp = COUNT(*) FROM #TempRap
-	SET @BodyExample = '';
-	WHILE (@CountTemp > 0)
+
+	INSERT INTO [util].[XE].[errors]
+	SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
+		   x.event_data.value('(event/data[@name="error_number"])[1]', 'int') AS error_number,
+		   x.event_data.value('(event/data[@name="severity"])[1]', 'int') AS severity,
+		   x.event_data.value('(event/data[@name="state"])[1]', 'int') AS state,
+		   x.event_data.value('(event/data[@name="user_defined"])[1]', 'bit') AS user_defined,
+		   x.event_data.value('(event/data[@name="category"]/text)[1]', 'nvarchar(max)') AS category,
+		   x.event_data.value('(event/data[@name="destination"]/text)[1]', 'nvarchar(max)') AS destination,
+		   x.event_data.value('(event/data[@name="is_intercepted"])[1]', 'bit') AS is_intercepted,
+		   x.event_data.value('(event/data[@name="message"])[1]', 'nvarchar(max)') AS message,
+		   x.event_data.value('(event/action[@name="transaction_id"])[1]', 'bigint') AS transaction_id,
+		   x.event_data.value('(event/action[@name="session_id"])[1]', 'int') AS session_id,
+		   x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') AS database_name,
+		   x.event_data.value('(event/action[@name="client_hostname"])[1]', 'nvarchar(max)') AS client_hostname,
+		   x.event_data.value('(event/action[@name="client_app_name"])[1]', 'nvarchar(max)') AS client_app_name,
+		   x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') AS username,
+		   x.event_data.value('(event/action[@name="sql_text"])[1]', 'nvarchar(max)') AS sql_text,
+		   x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') AS query_hash
+	FROM    sys.fn_xe_file_target_read_file (@XE_Path_XEL, @XE_Path_XEM, null, null)
+			   CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
+	WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
+	 AND x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)')  NOT IN
+			  (
+				  SELECT ee.query_hash
+				  FROM [util].[XE].[errors_exceptions] ee
+				  WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ee.query_hash
+						AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ee.database_name
+						AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ee.username
+						AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ee.error_number
+			  )
+	ORDER BY event_time DESC
+	---
+	---- REPPORT ----
+	Declare @Body varchar(max), @BodyW varchar(max),
+			@TableHeadW varchar(max),
+			@TableTailW varchar(max),
+			@TableExample nvarchar(max), @TableExampleBody nvarchar(max), @BodyExample nvarchar(max),
+			@Subject varchar(100),
+			@NumberOfErrors INT = 0;
+ 
+	Set NoCount On;
+	/* -------------------------------------------------------------------------------------------------------------- */
+	-- REPORT - NUMBER OF ERRORS BY HOURS
+	IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
+	  DROP TABLE #TempRap;
+	IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+	  DROP TABLE #TempRap2;
+
+	DECLARE @RowCount INT = 0;
+
+	SELECT TOP (10)
+		   e.error_number,
+		   m.text,
+		   COUNT(*) AS Number_of_errors,
+		   e.severity,
+		   e.state,
+		   e.category,
+		   e.destination,
+		   e.is_intercepted,
+		   e.client_app_name
+	INTO #TempRap
+	FROM [util].[XE].[errors] e
+		LEFT JOIN sys.messages m
+			ON e.error_number = m.message_id
+	WHERE m.language_id = 1033
+		  AND e.event_time > @StartDate
+		  AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+	GROUP BY e.error_number,
+			 e.severity,
+			 e.state,
+			 e.category,
+			 e.destination,
+			 e.is_intercepted,
+			 m.text,
+			 e.client_app_name
+	ORDER BY COUNT(*) DESC;
+
+	SET @RowCount = @@ROWCOUNT;
+
+	-- GET NUMBER OF ALL ERRORS --
+		SELECT @NumberOfErrors = COUNT(*) 
+		FROM [util].[XE].[errors] e
+		LEFT JOIN sys.messages m
+			ON e.error_number = m.message_id
+			WHERE m.language_id = 1033
+		  AND e.event_time > @StartDate
+		  AND e.client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+
+
+	IF (@RowCount <> 0 AND @NumberOfErrors > @MaxErrorsForNotification AND @email_rec IS NOT NULL)
 	BEGIN
-		-- GET FIRST ERROR ---
-		SELECT TOP(1) @EN = error_number, @State = state, @Category = category, @Destination = destination, @Severity = severity, @is_intercepted = is_intercepted, @ClientAppName = client_app_name FROM #TempRap ORDER BY Number_of_errors DESC
-		----------------------
-		SELECT  TOP(3) ID 
-				,CONVERT(CHAR(19), e.event_time, 121) AS event_time
-				,e.message
-				,e.sql_text
-				,e.database_name
-				,e.client_hostname
-				,e.client_app_name
-				,e.username
-		INTO #TempRap2
-		FROM [_SQL_].[XE].[errors] e
-		WHERE e.event_time > @StartDate AND e.error_number = @EN AND @State = state AND @Category = category AND @Destination = destination AND @Severity = severity AND @is_intercepted = is_intercepted AND @ClientAppName = client_app_name
-		AND client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-		ORDER BY e.event_time DESC;
+		Set @TableTailW = '</table>';
+		Set @TableHeadW = '<html><head>' +
+						  '<style>' +
+						  'td {border: solid black 1px;padding-left:5px;padding-right:5px;padding-top:1px;padding-bottom:1px;font-size:11pt;} ' +
+						  '</style>' +
+						  '</head>' +
+						  '<body><table cellpadding=0 cellspacing=0 border=0><caption>TOP 10 NUMBER OF ERRORS. DATE FROM ' + CONVERT(CHAR(19), @StartDate, 121) + ' TO ' + CONVERT(CHAR(19), @CurrentDate, 121) + '</caption>' +
+						  '<tr bgcolor=#c0f4c3>' +
+						  '<td align=center><b>Error Number</b></td>' +
+						  '<td align=center><b>Error Text</b></td>' +
+						  '<td align=center><b>Number of errors</b></td>' +
+						  '<td align=center><b>Severity</b></td>' +
+						  '<td align=center><b>State</b></td>' +
+						  '<td align=center><b>Category</b></td>' +
+						  '<td align=center><b>Destination</b></td>' +
+						  '<td align=center><b>Is intercepted?</b></td>' + 
+						  '<td align=center><b>Client app name</b></td></tr>';
 
-		Set @TableExample = '</br><table cellpadding=0 cellspacing=0 border=0><caption>TOP 3 EXAMPLES OF ERROR NR ' + CAST(@EN AS VARCHAR(10)) + '</caption>' +
-						  '<tr bgcolor=#90ffff>' +
-						  '<td align=center><b>ID</b></td>' +
-						  '<td align=center><b>Event time</b></td>' +
-						  '<td align=center><b>Message</b></td>' +
-						  '<td align=center><b>SQL Text</b></td>' +
-						  '<td align=center><b>Database Name</b></td>' +
-						  '<td align=center><b>Host Name</b></td>' +
-						  '<td align=center><b>Application Name</b></td>' +
-						  '<td align=center><b>User Name</b></td></tr>';
-
-		Select @TableExampleBody = (SELECT ID AS [TD align=right]
-							  ,event_time AS [TD align=center]
-							  ,ISNULL(message, 'n/a') AS [TD align=left]
-							  ,CAST(ISNULL(sql_text, 'n/a') AS NVARCHAR(255)) + ' [/cut]' AS [TD align=left]
-							  ,ISNULL(database_name, 'n/a') AS [TD align=left]
-							  ,ISNULL(client_hostname, 'n/a') AS [TD align=left]
+		Select @BodyW = (SELECT error_number AS [TD align=right]
+							  ,ISNULL(text, 'n/a') AS [TD align=left]
+							  ,ISNULL(Number_of_errors, 0) AS [TD align=right]
+							  ,ISNULL(severity, 0) AS [TD align=right]
+							  ,ISNULL(state, 0) AS [TD align=right]
+							  ,ISNULL(category, 'n/a') AS [TD align=center]
+							  ,ISNULL(destination, 'n/a') AS [TD align=center]
+							  ,ISNULL(is_intercepted, 0) AS [TD align=center]
 							  ,ISNULL(client_app_name, 'n/a') AS [TD align=center]
-							  ,ISNULL(username, 'n/a') AS [TD align=center]
-						FROM #TempRap2
-						WHERE	client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
-								ORDER BY event_time DESC
+						FROM #TempRap
+						WHERE client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+						ORDER BY Number_of_errors DESC
 						For XML raw('tr'), Elements)
 
-		select @TableExampleBody = ISNULL(@TableExampleBody, '');
+		-- Replace the entity codes and row numbers
+		Set @BodyW = Replace(@BodyW, '_x0020_', space(1))
+		Set @BodyW = Replace(@BodyW, '_x003D_', '=')
 
-		-- CLEAN UP ----------
-		DELETE FROM #TempRap WHERE error_number = @EN and state = @State and category = @Category and destination = @Destination and severity = @Severity and is_intercepted = @is_intercepted and client_app_name = @ClientAppName
-		----------------------
-		Set @BodyExample = @BodyExample + @TableExample + @TableExampleBody + '</table>';
-		IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
-		DROP TABLE #TempRap2;
-		SET @CountTemp = @CountTemp - 1;
-	END
-	--- 
-	Set @BodyExample = Replace(@BodyExample, '_x0020_', space(1));
-	Set @BodyExample = Replace(@BodyExample, '_x003D_', '=');
+		--- 
+		DECLARE @CountTemp INT, @EN INT, @State INT, @Category NVARCHAR(MAX), @Destination NVARCHAR(MAX), @Severity INT, @is_intercepted BIT, @ClientAppName NVARCHAR(MAX);
+		SELECT @CountTemp = COUNT(*) FROM #TempRap
+		SET @BodyExample = '';
+		WHILE (@CountTemp > 0)
+		BEGIN
+			-- GET FIRST ERROR ---
+			SELECT TOP(1) @EN = error_number, @State = state, @Category = category, @Destination = destination, @Severity = severity, @is_intercepted = is_intercepted, @ClientAppName = client_app_name FROM #TempRap ORDER BY Number_of_errors DESC
+			----------------------
+			SELECT  TOP(3) ID 
+					,CONVERT(CHAR(19), e.event_time, 121) AS event_time
+					,e.message
+					,e.sql_text
+					,e.database_name
+					,e.client_hostname
+					,e.client_app_name
+					,e.username
+			INTO #TempRap2
+			FROM [util].[XE].[errors] e
+			WHERE e.event_time > @StartDate AND e.error_number = @EN AND @State = state AND @Category = category AND @Destination = destination AND @Severity = severity AND @is_intercepted = is_intercepted AND @ClientAppName = client_app_name
+			AND client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+			ORDER BY e.event_time DESC;
+
+			Set @TableExample = '</br><table cellpadding=0 cellspacing=0 border=0><caption>TOP 3 EXAMPLES OF ERROR NR ' + CAST(@EN AS VARCHAR(10)) + '</caption>' +
+							  '<tr bgcolor=#90ffff>' +
+							  '<td align=center><b>ID</b></td>' +
+							  '<td align=center><b>Event time</b></td>' +
+							  '<td align=center><b>Message</b></td>' +
+							  '<td align=center><b>SQL Text</b></td>' +
+							  '<td align=center><b>Database Name</b></td>' +
+							  '<td align=center><b>Host Name</b></td>' +
+							  '<td align=center><b>Application Name</b></td>' +
+							  '<td align=center><b>User Name</b></td></tr>';
+
+			Select @TableExampleBody = (SELECT ID AS [TD align=right]
+								  ,event_time AS [TD align=center]
+								  ,ISNULL(message, 'n/a') AS [TD align=left]
+								  ,CAST(ISNULL(sql_text, 'n/a') AS NVARCHAR(255)) + ' [/cut]' AS [TD align=left]
+								  ,ISNULL(database_name, 'n/a') AS [TD align=left]
+								  ,ISNULL(client_hostname, 'n/a') AS [TD align=left]
+								  ,ISNULL(client_app_name, 'n/a') AS [TD align=center]
+								  ,ISNULL(username, 'n/a') AS [TD align=center]
+							FROM #TempRap2
+							WHERE	client_app_name NOT LIKE 'Microsoft SQL Server Management Studio%'
+									ORDER BY event_time DESC
+							For XML raw('tr'), Elements)
+
+			select @TableExampleBody = ISNULL(@TableExampleBody, '');
+
+			-- CLEAN UP ----------
+			DELETE FROM #TempRap WHERE error_number = @EN and state = @State and category = @Category and destination = @Destination and severity = @Severity and is_intercepted = @is_intercepted and client_app_name = @ClientAppName
+			----------------------
+			Set @BodyExample = @BodyExample + @TableExample + @TableExampleBody + '</table>';
+			IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+			DROP TABLE #TempRap2;
+			SET @CountTemp = @CountTemp - 1;
+		END
+		--- 
+		Set @BodyExample = Replace(@BodyExample, '_x0020_', space(1));
+		Set @BodyExample = Replace(@BodyExample, '_x003D_', '=');
 	
-	-- CREATE HTML BODY 
-	Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [_SQL_].[XE].[errors] WHERE ID = ... </br></br>
-            All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b></br>
-            Errors notification level: <b>' + CAST(@MaxErrorsForNotification AS VARCHAR(10))  + '</b></br>
-            </br>XE Errors 2019</body></html>'
+		-- CREATE HTML BODY 
+		Select @Body = @TableHeadW + @BodyW + @TableTailW + @BodyExample + '</br></br>Get full example: </br> SELECT * FROM [util].[XE].[errors] WHERE ID = ... </br></br>
+				All the Errors collected: <b>' + CAST(@NumberOfErrors AS VARCHAR(10))  + '</b></br>
+				Errors notification level: <b>' + CAST(@MaxErrorsForNotification AS VARCHAR(10))  + '</b></br>
+				</br>XE Errors 2023</body></html>'
 	
-	SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
-	-- return output
-	 EXEC msdb.dbo.sp_send_dbmail
-				@profile_name = @profile_name,
-				@recipients = @email_rec,
-				@body =  @Body,
-				@subject = @Subject,
-				@body_format = 'HTML';
-END -- IF ROWCOUNT <> 0
----- CLEAN UP --
-IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
-  DROP TABLE #TempRap;
-IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
-  DROP TABLE #TempRap2;
+		SET @Subject = '[' + @@servername + '] XE ERROR REPORT OF ' +  CONVERT(CHAR(10), GETDATE(), 121)
+		-- return output
+		 EXEC msdb.dbo.sp_send_dbmail
+					@profile_name = @profile_name,
+					@recipients = @email_rec,
+					@body =  @Body,
+					@subject = @Subject,
+					@body_format = 'HTML';
+	END -- IF ROWCOUNT <> 0
+	---- CLEAN UP --
+	IF OBJECT_ID('tempdb.dbo.#TempRap', 'U') IS NOT NULL
+	  DROP TABLE #TempRap;
+	IF OBJECT_ID('tempdb.dbo.#TempRap2', 'U') IS NOT NULL
+	  DROP TABLE #TempRap2;
+END
 GO
 
 ---- 6. JOB ----
