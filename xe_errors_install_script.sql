@@ -123,10 +123,10 @@ BEGIN
 			  (
 				  SELECT ee.query_hash
 				  FROM [XE].[errors_exceptions] ee
-				  WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ee.query_hash
-						AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ee.database_name
-						AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ee.username
-						AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ee.error_number
+				  WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ISNULL(ee.query_hash, x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)'))
+		                  AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ISNULL(ee.database_name, x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)'))
+		                  AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ISNULL(ee.username, x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)'))
+		                  AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ISNULL(ee.error_number, x.event_data.value('(event/data[@name="error_number"])[1]', 'int'))
 			  )
 	ORDER BY event_time DESC
 	---
