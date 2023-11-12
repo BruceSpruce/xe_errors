@@ -120,7 +120,7 @@ BEGIN
 	WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
 	ORDER BY event_time DESC
 	--- DELETE EXCEPTIONS ---
-	DELETE [t] FROM #errors [t] INNER JOIN [XE].[errors_exceptions] [te] 
+	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te] 
 	ON [t].[sql_text]  LIKE '%' + [te].[sql_text] + '%'
 	AND [t].[username] = [te].[username]
 	AND [t].[database_name] = [te].[database_name]
