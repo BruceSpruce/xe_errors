@@ -51,7 +51,7 @@ GO
 CREATE TABLE [_SQL_].[XE].[errors_exceptions](
 	[ID] [int] IDENTITY(1,1) CONSTRAINT PK_ID_EXCP PRIMARY KEY CLUSTERED WITH FILLFACTOR = 100,
 	[error_number] [int] NULL,
-    [query_hash] [nvarchar](max) NULL,
+    [sql_text] [nvarchar](max) NULL,
     [database_name] [nvarchar](max) NULL,
     [username] [nvarchar](max) NULL
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
@@ -97,8 +97,6 @@ BEGIN
 	DECLARE @StartDate datetime2 = NULL;
 	SELECT @StartDate = ISNULL(MAX(event_time), CAST('2001-01-01 00:00:00.000' AS datetime2)) FROM [XE].[errors]
 
-
-	INSERT INTO [XE].[errors]
 	SELECT DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) AS event_time,
 		   x.event_data.value('(event/data[@name="error_number"])[1]', 'int') AS error_number,
 		   x.event_data.value('(event/data[@name="severity"])[1]', 'int') AS severity,
@@ -116,20 +114,20 @@ BEGIN
 		   x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') AS username,
 		   x.event_data.value('(event/action[@name="sql_text"])[1]', 'nvarchar(max)') AS sql_text,
 		   x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') AS query_hash
+	INTO #ERRORS
 	FROM    sys.fn_xe_file_target_read_file (@XE_Path_XEL, @XE_Path_XEM, null, null)
 			   CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
 	WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
-	 AND x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)')  NOT IN
-			  (
-				  SELECT ee.query_hash
-				  FROM [XE].[errors_exceptions] ee
-				  WHERE x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)') = ISNULL(ee.query_hash, x.event_data.value('(event/action[@name="query_hash"])[1]', 'nvarchar(max)'))
-		                  AND x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)') = ISNULL(ee.database_name, x.event_data.value('(event/action[@name="database_name"])[1]', 'nvarchar(max)'))
-		                  AND x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)') = ISNULL(ee.username, x.event_data.value('(event/action[@name="username"])[1]', 'nvarchar(max)'))
-		                  AND x.event_data.value('(event/data[@name="error_number"])[1]', 'int') = ISNULL(ee.error_number, x.event_data.value('(event/data[@name="error_number"])[1]', 'int'))
-			  )
 	ORDER BY event_time DESC
+	--- DELETE EXCEPTIONS ---
+	DELETE [t] FROM #errors [t] INNER JOIN [XE].[errors_exceptions] [te] 
+	ON [t].[sql_text]  LIKE '%' + [te].[sql_text] + '%'
+	AND [t].[username] = [te].[username]
+	AND [t].[database_name] = [te].[database_name]
+	AND [t].[error_number] = [te].[error_number]
 	---
+	INSERT INTO [_SQL_].[XE].[errors]
+	SELECT * FROM #ERRORS
 	---- REPPORT ----
 	Declare @Body varchar(max), @BodyW varchar(max),
 			@TableHeadW varchar(max),
