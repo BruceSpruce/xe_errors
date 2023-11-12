@@ -125,8 +125,12 @@ BEGIN
 	AND [t].[username] = [te].[username]
 	AND [t].[database_name] = [te].[database_name]
 	AND [t].[error_number] = [te].[error_number]
-	--- DELETE NULL's
-	DELETE [t] FROM #ERRORS [t] WHERE [sql_text] IS NULL
+	--- DELETE SQL_TEXT NULL's
+	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te]
+	ON [t].[username] = [te].[username]
+	AND [t].[database_name] = [te].[database_name]
+	AND [t].[error_number] = [te].[error_number]
+	WHERE [t].[sql_text] IS NULL
 	--- INSERT
 	INSERT INTO [_SQL_].[XE].[errors]
 	SELECT * FROM #ERRORS
