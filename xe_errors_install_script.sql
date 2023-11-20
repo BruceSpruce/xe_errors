@@ -57,6 +57,12 @@ CREATE TABLE [_SQL_].[XE].[errors_exceptions](
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
 GO
 
+CREATE TABLE [_SQL_].[XE].[errors_host_exceptions](
+	[ID] [int] IDENTITY(1,1) CONSTRAINT PK_ID_HOSTEXCP PRIMARY KEY CLUSTERED WITH FILLFACTOR = 100,
+	[client_hostname] [nvarchar](max) NULL
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
 ---- 5. CREATE PROCEDURE ----
 
 SET ANSI_NULLS ON
@@ -119,6 +125,9 @@ BEGIN
 			   CROSS APPLY (SELECT CAST(event_data AS XML) AS event_data) as x
 	WHERE DATEADD(mi, DATEDIFF(mi, GETUTCDATE(), CURRENT_TIMESTAMP), x.event_data.value('(event/@timestamp)[1]', 'datetime2')) > @StartDate
 	ORDER BY event_time DESC
+	--- DELETE HOSTNAME EXCEPTIONS ---
+	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_host_exceptions] [te]
+	ON [t].[client_hostname] = [te].[client_hostname];
 	--- DELETE EXCEPTIONS ---
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te] 
 	ON [t].[sql_text]  LIKE '%' + [te].[sql_text] + '%'
