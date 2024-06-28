@@ -88,7 +88,8 @@ GO
 ALTER PROCEDURE [XE].[usp_XEGetErrors] @profile_name NVARCHAR(128) = 'mail_profile',
 										@email_rec NVARCHAR(MAX) = 'MSSQLAdmins@domain.com',
                                         @XE_Path NVARCHAR(MAX) = 'S:\XE',
-                                        @MaxErrorsForNotification INT = 0
+                                        @MaxErrorsForNotification INT = 0,
+					@version VARCHAR(4) = '1.10'
 AS
 BEGIN
 	SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
@@ -146,6 +147,12 @@ BEGIN
 	AND [t].[database_name] = [te].[database_name]
 	AND [t].[error_number] = [te].[error_number]
 	WHERE [te].[username] IS NULL
+	--- DELETE WHEN ONLY USERS IS NOT NULL's
+	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te]
+	ON [t].[username] = [te].[username]
+	WHERE [te].[sql_text] IS NULL
+	AND [te].[database_name] IS NULL
+	AND [te].[error_number] IS NULL
 	--- INSERT
 	INSERT INTO [_SQL_].[XE].[errors]
 	SELECT * FROM #ERRORS
