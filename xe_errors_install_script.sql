@@ -53,14 +53,22 @@ CREATE TABLE [_SQL_].[XE].[errors_exceptions](
 	[error_number] [int] NULL,
     [sql_text] [nvarchar](max) NULL,
     [database_name] [nvarchar](max) NULL,
-    [username] [nvarchar](max) NULL
+    [username] [nvarchar](max) NULL,
+	[active] [bit] NOT NULL
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
+ALTER TABLE [XE].[errors_exceptions] ADD  CONSTRAINT [DF_errors_exceptions_active]  DEFAULT ((1)) FOR [active]
 GO
 
 CREATE TABLE [_SQL_].[XE].[errors_host_exceptions](
 	[ID] [int] IDENTITY(1,1) CONSTRAINT PK_ID_HOSTEXCP PRIMARY KEY CLUSTERED WITH FILLFACTOR = 100,
-	[client_hostname] [nvarchar](max) NULL
+	[client_hostname] [nvarchar](max) NULL,
+	[active] [bit] NOT NULL
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
+ALTER TABLE [XE].[errors_host_exceptions] ADD  CONSTRAINT [DF_errors_host_exceptions_active]  DEFAULT ((1)) FOR [active]
 GO
 
 ---- 5. CREATE PROCEDURE ----
@@ -128,31 +136,36 @@ BEGIN
 	ORDER BY event_time DESC
 	--- DELETE HOSTNAME EXCEPTIONS ---
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_host_exceptions] [te]
-	ON [t].[client_hostname] = [te].[client_hostname];
+	ON [t].[client_hostname] = [te].[client_hostname]
+	WHERE [te].[active] = 1;
 	--- DELETE EXCEPTIONS ---
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te] 
 	ON [t].[sql_text]  LIKE '%' + [te].[sql_text] + '%'
 	AND [t].[username] = [te].[username]
 	AND [t].[database_name] = [te].[database_name]
 	AND [t].[error_number] = [te].[error_number]
+	WHERE [te].[active] = 1;
 	--- DELETE SQL_TEXT NULL's
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te]
 	ON [t].[username] = [te].[username]
 	AND [t].[database_name] = [te].[database_name]
 	AND [t].[error_number] = [te].[error_number]
 	WHERE [t].[sql_text] IS NULL
+	AND [te].[active] = 1;
 	--- DELETE USERS NULL's
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te]
 	ON [t].[sql_text]  LIKE '%' + [te].[sql_text] + '%'
 	AND [t].[database_name] = [te].[database_name]
 	AND [t].[error_number] = [te].[error_number]
 	WHERE [te].[username] IS NULL
+	AND [te].[active] = 1;
 	--- DELETE WHEN ONLY USERS IS NOT NULL's
 	DELETE [t] FROM #ERRORS [t] INNER JOIN [XE].[errors_exceptions] [te]
 	ON [t].[username] = [te].[username]
 	WHERE [te].[sql_text] IS NULL
 	AND [te].[database_name] IS NULL
 	AND [te].[error_number] IS NULL
+	AND [te].[active] = 1;
 	--- INSERT
 	INSERT INTO [_SQL_].[XE].[errors]
 	SELECT * FROM #ERRORS
